@@ -1,5 +1,6 @@
 const express = require("express");
 const cookieParser = require("cookie-parser");
+const QRCode = require("qrcode");
 const { openDatabase } = require("./db");
 const { createUser, verifyPasswordLogin, normalizeEmail } = require("./users");
 const {
@@ -11,6 +12,9 @@ const {
 } = require("./session");
 const { writeAudit } = require("./audit");
 const { createRateLimiter } = require("./rate-limit");
+const { parseEncryptionKey, encryptSecret, decryptSecret } = require("./crypto-secret");
+const { generateSecret, otpauthUri, verifyTotp } = require("./totp");
+const { createPendingMfaStore } = require("./pending-mfa");
 
 function clientMeta(req) {
   return {
@@ -28,9 +32,23 @@ function requireSession(req, res, next) {
   next();
 }
 
-function createApp({ dbPath, security } = {}) {
+function issueSession(res, db, user, meta) {
+  const token = createSession(db, { userId: user.id, ...meta });
+  res.cookie(COOKIE_NAME, token, sessionCookieOptions());
+  return token;
+}
+
+function createApp({ dbPath, security, encryptionKey, totp } = {}) {
   const db = openDatabase(dbPath);
   const limiter = createRateLimiter(security);
+  const now = totp?.now ?? (() => Date.now());
+  const makeSecret = totp?.generateSecret ?? generateSecret;
+  const key = parseEncryptionKey(
+    encryptionKey ?? process.env.MFA_ENCRYPTION_KEY ?? "0".repeat(64),
+  );
+  const pendingMfa = createPendingMfaStore({ now });
+  const lastTotpStep = new Map();
+
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -64,16 +82,18 @@ function createApp({ dbPath, security } = {}) {
         password: req.body?.password,
       });
       limiter.recordSuccess(email);
-      const token = createSession(db, {
-        userId: user.id,
-        ...meta,
-      });
+
+      if (user.mfa_enabled) {
+        const mfaToken = pendingMfa.issue(user.id);
+        return res.status(200).json({ status: "MFA_REQUIRED", mfa_token: mfaToken });
+      }
+
+      issueSession(res, db, user, meta);
       writeAudit(db, {
         userId: user.id,
         event: "login_success",
         ...meta,
       });
-      res.cookie(COOKIE_NAME, token, sessionCookieOptions());
       res.status(200).json({ id: user.id, email: user.email, mfa_enabled: user.mfa_enabled });
     } catch (err) {
       if (err.status === 401) {
@@ -109,6 +129,106 @@ function createApp({ dbPath, security } = {}) {
     }
     res.clearCookie(COOKIE_NAME, { ...sessionCookieOptions(), maxAge: 0 });
     res.status(204).end();
+  });
+
+  app.post("/mfa/enroll", requireSession, async (req, res, next) => {
+    try {
+      if (req.session.mfa_enabled) {
+        return res.status(409).json({ error: "MFA already enabled" });
+      }
+      const secret = makeSecret();
+      const encrypted = encryptSecret(secret, key);
+      db.prepare(
+        `INSERT INTO mfa_totp (user_id, encrypted_secret, confirmed_at)
+         VALUES (?, ?, NULL)
+         ON CONFLICT(user_id) DO UPDATE SET
+           encrypted_secret = excluded.encrypted_secret,
+           confirmed_at = NULL`,
+      ).run(req.session.user_id, encrypted);
+
+      const otpauth = otpauthUri(secret, req.session.email);
+      const qrDataUrl = await QRCode.toDataURL(otpauth);
+      res.json({ otpauth_uri: otpauth, qr_data_url: qrDataUrl });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/mfa/confirm", requireSession, (req, res, next) => {
+    try {
+      const row = db
+        .prepare("SELECT encrypted_secret, confirmed_at FROM mfa_totp WHERE user_id = ?")
+        .get(req.session.user_id);
+      if (!row) {
+        return res.status(400).json({ error: "MFA is not enrolled" });
+      }
+      const secret = decryptSecret(row.encrypted_secret, key);
+      const result = verifyTotp(secret, req.session.email, req.body?.code, now());
+      if (!result) {
+        writeAudit(db, {
+          userId: req.session.user_id,
+          event: "mfa_challenge_failed",
+          ...clientMeta(req),
+        });
+        return res.status(401).json({ error: "Invalid code" });
+      }
+      db.prepare("UPDATE mfa_totp SET confirmed_at = ? WHERE user_id = ?").run(
+        new Date(now()).toISOString(),
+        req.session.user_id,
+      );
+      db.prepare("UPDATE users SET mfa_enabled = 1 WHERE id = ?").run(req.session.user_id);
+      writeAudit(db, {
+        userId: req.session.user_id,
+        event: "mfa_enrolled",
+        ...clientMeta(req),
+      });
+      res.json({ mfa_enabled: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/mfa/verify", (req, res, next) => {
+    try {
+      const pending = pendingMfa.peek(req.body?.mfa_token);
+      if (!pending) {
+        return res.status(401).json({ error: "Invalid or expired MFA token" });
+      }
+      const user = db
+        .prepare(
+          `SELECT users.id, users.email, users.mfa_enabled, mfa_totp.encrypted_secret
+           FROM users
+           JOIN mfa_totp ON mfa_totp.user_id = users.id
+           WHERE users.id = ? AND users.mfa_enabled = 1 AND mfa_totp.confirmed_at IS NOT NULL`,
+        )
+        .get(pending.userId);
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      const secret = decryptSecret(user.encrypted_secret, key);
+      const result = verifyTotp(secret, user.email, req.body?.code, now());
+      const lastStep = lastTotpStep.get(user.id);
+      if (!result || result.step === lastStep) {
+        writeAudit(db, {
+          userId: user.id,
+          event: "mfa_challenge_failed",
+          ...clientMeta(req),
+        });
+        return res.status(401).json({ error: "Invalid code" });
+      }
+      pendingMfa.consume(req.body.mfa_token);
+      lastTotpStep.set(user.id, result.step);
+      const meta = clientMeta(req);
+      issueSession(res, db, user, meta);
+      writeAudit(db, {
+        userId: user.id,
+        event: "login_success",
+        ...meta,
+      });
+      res.status(200).json({ id: user.id, email: user.email, mfa_enabled: true });
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.use((err, _req, res, _next) => {

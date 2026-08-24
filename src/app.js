@@ -1,7 +1,7 @@
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const { openDatabase } = require("./db");
-const { createUser, verifyPasswordLogin } = require("./users");
+const { createUser, verifyPasswordLogin, normalizeEmail } = require("./users");
 const {
   COOKIE_NAME,
   createSession,
@@ -9,6 +9,8 @@ const {
   revokeSession,
   sessionCookieOptions,
 } = require("./session");
+const { writeAudit } = require("./audit");
+const { createRateLimiter } = require("./rate-limit");
 
 function clientMeta(req) {
   return {
@@ -26,14 +28,16 @@ function requireSession(req, res, next) {
   next();
 }
 
-function createApp({ dbPath } = {}) {
+function createApp({ dbPath, security } = {}) {
   const db = openDatabase(dbPath);
+  const limiter = createRateLimiter(security);
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
   app.use(express.json());
   app.use(cookieParser());
   app.locals.db = db;
+  app.locals.limiter = limiter;
 
   app.post("/signup", async (req, res, next) => {
     try {
@@ -48,18 +52,39 @@ function createApp({ dbPath } = {}) {
   });
 
   app.post("/login", async (req, res, next) => {
+    const email = normalizeEmail(req.body?.email);
+    const meta = clientMeta(req);
     try {
+      if (limiter.isBlocked(email, meta.ipAddress)) {
+        return res.status(429).json({ error: "Too many attempts" });
+      }
+
       const user = await verifyPasswordLogin(db, {
         email: req.body?.email,
         password: req.body?.password,
       });
+      limiter.recordSuccess(email);
       const token = createSession(db, {
         userId: user.id,
-        ...clientMeta(req),
+        ...meta,
+      });
+      writeAudit(db, {
+        userId: user.id,
+        event: "login_success",
+        ...meta,
       });
       res.cookie(COOKIE_NAME, token, sessionCookieOptions());
       res.status(200).json({ id: user.id, email: user.email, mfa_enabled: user.mfa_enabled });
     } catch (err) {
+      if (err.status === 401) {
+        limiter.recordFailure(email, meta.ipAddress);
+        const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+        writeAudit(db, {
+          userId: existing?.id ?? null,
+          event: "login_failed",
+          ...meta,
+        });
+      }
       next(err);
     }
   });
@@ -73,7 +98,15 @@ function createApp({ dbPath } = {}) {
   });
 
   app.post("/logout", (req, res) => {
+    const session = getActiveSession(db, req.cookies[COOKIE_NAME]);
     revokeSession(db, req.cookies[COOKIE_NAME]);
+    if (session) {
+      writeAudit(db, {
+        userId: session.user_id,
+        event: "logout",
+        ...clientMeta(req),
+      });
+    }
     res.clearCookie(COOKIE_NAME, { ...sessionCookieOptions(), maxAge: 0 });
     res.status(204).end();
   });

@@ -6,7 +6,10 @@
 </head>
 <body>
   <h1>mfa-auth（極簡試玩）</h1>
-  <p>試玩帳號見頁面底部。伺服器需已執行 <code>npm start</code>。</p>
+  <p>
+    MFA 為強制：密碼登入成功後會<strong>自動產生 QR</strong>，Confirm 完成前 <code>/me</code> 會是 403。
+    之後每次登入需再輸入 TOTP／備援碼。
+  </p>
 
   <h2>註冊</h2>
   <form id="signup">
@@ -22,7 +25,21 @@
     <button type="submit">Login</button>
   </form>
 
-  <h2>MFA（僅在 login 回傳 MFA_REQUIRED 時需要）</h2>
+  <h2>開啟 MFA（登入後自動出現 QR；也可按重新產生）</h2>
+  <p>
+    <button type="button" id="enroll">重新產生 QR（Enroll）</button>
+  </p>
+  <p id="qr-wrap" hidden>
+    <img id="qr" alt="TOTP QR" width="200" height="200" /><br />
+    <small>用 Google Authenticator / Authy 掃描，再填下方 6 碼 Confirm。</small>
+  </p>
+  <form id="confirm">
+    <label>App 上的 6 碼 <input name="code" pattern="[0-9]{6}" maxlength="6" required /></label>
+    <button type="submit">Confirm（真正開啟 MFA）</button>
+  </form>
+  <p><strong>備援碼只會在 Confirm 成功時顯示一次</strong>，請立刻複製存好。</p>
+
+  <h2>之後登入的 MFA 驗證（login 回傳 MFA_REQUIRED 時）</h2>
   <form id="mfa">
     <label>mfa_token <input name="mfa_token" id="mfa_token" /></label>
     <label>code（TOTP 或備援碼） <input name="code" /></label>
@@ -36,7 +53,7 @@
   <h2>輸出</h2>
   <pre id="out">(尚未操作)</pre>
 
-  <h2>試玩帳號（無 MFA）</h2>
+  <h2>試玩帳號</h2>
   <ul>
     <li>alice@example.com / password12345</li>
     <li>bob@example.com / password12345</li>
@@ -50,6 +67,18 @@
       out.textContent = typeof data === "string"
         ? label + "\n" + data
         : label + "\n" + JSON.stringify(data, null, 2);
+    }
+
+    function showQr(dataUrl) {
+      const wrap = document.getElementById("qr-wrap");
+      const img = document.getElementById("qr");
+      if (dataUrl) {
+        img.src = dataUrl;
+        wrap.hidden = false;
+      } else {
+        wrap.hidden = true;
+        img.removeAttribute("src");
+      }
     }
 
     async function api(method, path, body) {
@@ -88,7 +117,25 @@
       if (result.body && result.body.mfa_token) {
         document.getElementById("mfa_token").value = result.body.mfa_token;
       }
+      if (result.body && result.body.status === "MFA_ENROLLMENT_REQUIRED") {
+        showQr(result.body.qr_data_url);
+      }
       show("POST /login", result);
+    });
+
+    document.getElementById("enroll").addEventListener("click", async () => {
+      const result = await api("POST", "/mfa/enroll");
+      show("POST /mfa/enroll", result);
+      if (result.status === 200 && result.body) {
+        showQr(result.body.qr_data_url);
+      }
+    });
+
+    document.getElementById("confirm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const result = await api("POST", "/mfa/confirm", { code: fd.get("code") });
+      show("POST /mfa/confirm（請立刻複製 backup_codes）", result);
     });
 
     document.getElementById("mfa").addEventListener("submit", async (e) => {

@@ -98,7 +98,7 @@ describe("password session", () => {
     expect(sessionSetCookie(res)).toBeUndefined();
   });
 
-  it("logs in with an HttpOnly SameSite session cookie and allows GET /me", async () => {
+  it("logs in with an HttpOnly SameSite session cookie and requires MFA before /me", async () => {
     await request(app).post("/signup").send({ email: EMAIL, password: PASSWORD });
 
     const unauth = await request(app).get("/me");
@@ -110,6 +110,8 @@ describe("password session", () => {
     });
 
     expect(login.status).toBe(200);
+    expect(login.body.status).toBe("MFA_ENROLLMENT_REQUIRED");
+    expect(login.body.qr_data_url).toMatch(/^data:image\/png;base64,/);
     const cookie = sessionSetCookie(login);
     expect(cookie).toBeTruthy();
     expect(cookie.toLowerCase()).toContain("httponly");
@@ -122,10 +124,8 @@ describe("password session", () => {
     expect(hashed[0].revoked_at).toBeNull();
 
     const me = await request(app).get("/me").set("Cookie", cookieHeader(login));
-    expect(me.status).toBe(200);
-    expect(me.body.email).toBe(EMAIL);
-    expect(me.body.id).toBeTruthy();
-    expect(me.body.password_hash).toBeUndefined();
+    expect(me.status).toBe(403);
+    expect(me.body.status).toBe("MFA_ENROLLMENT_REQUIRED");
   });
 
   it("revokes the session on POST /logout so GET /me fails", async () => {

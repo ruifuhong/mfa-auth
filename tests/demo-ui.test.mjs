@@ -53,6 +53,9 @@ describe("demo ui", () => {
     expect(res.text).toContain("alice@example.com");
     expect(res.text).toContain('id="login"');
     expect(res.text).toContain('id="logout"');
+    expect(res.text).toContain('id="enroll"');
+    expect(res.text).toContain('id="confirm"');
+    expect(res.text).toContain('id="mfa"');
   });
 });
 
@@ -82,6 +85,8 @@ describe("demo seed", () => {
       expect(login.status).toBe(200);
       expect(login.body.email).toBe(demo.email);
       expect(login.body.mfa_enabled).toBe(false);
+      expect(login.body.status).toBe("MFA_ENROLLMENT_REQUIRED");
+      expect(login.body.qr_data_url).toMatch(/^data:image\/png;base64,/);
       await expect(
         verifyPasswordLogin(app.locals.db, {
           email: demo.email,

@@ -34,6 +34,31 @@ function requireSession(req, res, next) {
   next();
 }
 
+function requireMfaEnabled(req, res, next) {
+  if (!req.session.mfa_enabled) {
+    return res.status(403).json({
+      error: "MFA enrollment required",
+      status: "MFA_ENROLLMENT_REQUIRED",
+    });
+  }
+  next();
+}
+
+async function enrollTotpForUser(db, { userId, email, makeSecret, key }) {
+  const secret = makeSecret();
+  const encrypted = encryptSecret(secret, key);
+  db.prepare(
+    `INSERT INTO mfa_totp (user_id, encrypted_secret, confirmed_at)
+     VALUES (?, ?, NULL)
+     ON CONFLICT(user_id) DO UPDATE SET
+       encrypted_secret = excluded.encrypted_secret,
+       confirmed_at = NULL`,
+  ).run(userId, encrypted);
+  const otpauth = otpauthUri(secret, email);
+  const qrDataUrl = await QRCode.toDataURL(otpauth);
+  return { otpauth_uri: otpauth, qr_data_url: qrDataUrl };
+}
+
 function issueSession(res, db, user, meta) {
   const token = createSession(db, { userId: user.id, ...meta });
   res.cookie(COOKIE_NAME, token, sessionCookieOptions());
@@ -91,12 +116,25 @@ function createApp({ dbPath, security, encryptionKey, totp } = {}) {
       }
 
       issueSession(res, db, user, meta);
+      const enrollment = await enrollTotpForUser(db, {
+        userId: user.id,
+        email: user.email,
+        makeSecret,
+        key,
+      });
       writeAudit(db, {
         userId: user.id,
         event: "login_success",
         ...meta,
       });
-      res.status(200).json({ id: user.id, email: user.email, mfa_enabled: user.mfa_enabled });
+      res.status(200).json({
+        status: "MFA_ENROLLMENT_REQUIRED",
+        id: user.id,
+        email: user.email,
+        mfa_enabled: false,
+        otpauth_uri: enrollment.otpauth_uri,
+        qr_data_url: enrollment.qr_data_url,
+      });
     } catch (err) {
       if (err.status === 401) {
         limiter.recordFailure(email, meta.ipAddress);
@@ -111,7 +149,7 @@ function createApp({ dbPath, security, encryptionKey, totp } = {}) {
     }
   });
 
-  app.get("/me", requireSession, (req, res) => {
+  app.get("/me", requireSession, requireMfaEnabled, (req, res) => {
     res.json({
       id: req.session.user_id,
       email: req.session.email,
@@ -138,19 +176,13 @@ function createApp({ dbPath, security, encryptionKey, totp } = {}) {
       if (req.session.mfa_enabled) {
         return res.status(409).json({ error: "MFA already enabled" });
       }
-      const secret = makeSecret();
-      const encrypted = encryptSecret(secret, key);
-      db.prepare(
-        `INSERT INTO mfa_totp (user_id, encrypted_secret, confirmed_at)
-         VALUES (?, ?, NULL)
-         ON CONFLICT(user_id) DO UPDATE SET
-           encrypted_secret = excluded.encrypted_secret,
-           confirmed_at = NULL`,
-      ).run(req.session.user_id, encrypted);
-
-      const otpauth = otpauthUri(secret, req.session.email);
-      const qrDataUrl = await QRCode.toDataURL(otpauth);
-      res.json({ otpauth_uri: otpauth, qr_data_url: qrDataUrl });
+      const enrollment = await enrollTotpForUser(db, {
+        userId: req.session.user_id,
+        email: req.session.email,
+        makeSecret,
+        key,
+      });
+      res.json(enrollment);
     } catch (err) {
       next(err);
     }

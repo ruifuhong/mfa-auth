@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <title>mfa-auth demo</title>
+</head>
+<body>
+  <h1>mfa-auth（極簡試玩）</h1>
+  <p>試玩帳號見頁面底部。伺服器需已執行 <code>npm start</code>。</p>
+
+  <h2>註冊</h2>
+  <form id="signup">
+    <label>email <input name="email" type="email" required /></label>
+    <label>password <input name="password" type="password" required minlength="8" /></label>
+    <button type="submit">Signup</button>
+  </form>
+
+  <h2>登入</h2>
+  <form id="login">
+    <label>email <input name="email" type="email" required value="alice@example.com" /></label>
+    <label>password <input name="password" type="password" required value="password12345" /></label>
+    <button type="submit">Login</button>
+  </form>
+
+  <h2>MFA（僅在 login 回傳 MFA_REQUIRED 時需要）</h2>
+  <form id="mfa">
+    <label>mfa_token <input name="mfa_token" id="mfa_token" /></label>
+    <label>code（TOTP 或備援碼） <input name="code" /></label>
+    <button type="submit">Verify MFA</button>
+  </form>
+
+  <h2>目前身分</h2>
+  <button type="button" id="me">GET /me</button>
+  <button type="button" id="logout">Logout</button>
+
+  <h2>輸出</h2>
+  <pre id="out">(尚未操作)</pre>
+
+  <h2>試玩帳號（無 MFA）</h2>
+  <ul>
+    <li>alice@example.com / password12345</li>
+    <li>bob@example.com / password12345</li>
+    <li>carol@example.com / password12345</li>
+  </ul>
+
+  <script>
+    const out = document.getElementById("out");
+
+    function show(label, data) {
+      out.textContent = typeof data === "string"
+        ? label + "\n" + data
+        : label + "\n" + JSON.stringify(data, null, 2);
+    }
+
+    async function api(method, path, body) {
+      const res = await fetch(path, {
+        method,
+        credentials: "include",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const text = await res.text();
+      let json = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        json = text;
+      }
+      return { status: res.status, body: json };
+    }
+
+    document.getElementById("signup").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      show("POST /signup", await api("POST", "/signup", {
+        email: fd.get("email"),
+        password: fd.get("password"),
+      }));
+    });
+
+    document.getElementById("login").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const result = await api("POST", "/login", {
+        email: fd.get("email"),
+        password: fd.get("password"),
+      });
+      if (result.body && result.body.mfa_token) {
+        document.getElementById("mfa_token").value = result.body.mfa_token;
+      }
+      show("POST /login", result);
+    });
+
+    document.getElementById("mfa").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      show("POST /mfa/verify", await api("POST", "/mfa/verify", {
+        mfa_token: fd.get("mfa_token"),
+        code: fd.get("code"),
+      }));
+    });
+
+    document.getElementById("me").addEventListener("click", async () => {
+      show("GET /me", await api("GET", "/me"));
+    });
+
+    document.getElementById("logout").addEventListener("click", async () => {
+      show("POST /logout", await api("POST", "/logout"));
+    });
+  </script>
+</body>
+</html>

@@ -1,3 +1,4 @@
+const path = require("node:path");
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const QRCode = require("qrcode");
@@ -244,6 +245,8 @@ function createApp({ dbPath, security, encryptionKey, totp } = {}) {
       next(err);
     }
   });
+
+  app.use(express.static(path.join(__dirname, "..", "public")));
 
   app.use((err, _req, res, _next) => {
     const status = err.status || 500;

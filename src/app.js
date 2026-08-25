@@ -15,6 +15,7 @@ const { createRateLimiter } = require("./rate-limit");
 const { parseEncryptionKey, encryptSecret, decryptSecret } = require("./crypto-secret");
 const { generateSecret, otpauthUri, verifyTotp } = require("./totp");
 const { createPendingMfaStore } = require("./pending-mfa");
+const { generateBackupCodes, insertBackupCodes, consumeBackupCode } = require("./backup-codes");
 
 function clientMeta(req) {
   return {
@@ -159,7 +160,7 @@ function createApp({ dbPath, security, encryptionKey, totp } = {}) {
       const row = db
         .prepare("SELECT encrypted_secret, confirmed_at FROM mfa_totp WHERE user_id = ?")
         .get(req.session.user_id);
-      if (!row) {
+      if (!row || row.confirmed_at) {
         return res.status(400).json({ error: "MFA is not enrolled" });
       }
       const secret = decryptSecret(row.encrypted_secret, key);
@@ -177,12 +178,14 @@ function createApp({ dbPath, security, encryptionKey, totp } = {}) {
         req.session.user_id,
       );
       db.prepare("UPDATE users SET mfa_enabled = 1 WHERE id = ?").run(req.session.user_id);
+      const backupCodes = generateBackupCodes();
+      insertBackupCodes(db, req.session.user_id, backupCodes);
       writeAudit(db, {
         userId: req.session.user_id,
         event: "mfa_enrolled",
         ...clientMeta(req),
       });
-      res.json({ mfa_enabled: true });
+      res.json({ mfa_enabled: true, backup_codes: backupCodes });
     } catch (err) {
       next(err);
     }
@@ -208,7 +211,9 @@ function createApp({ dbPath, security, encryptionKey, totp } = {}) {
       const secret = decryptSecret(user.encrypted_secret, key);
       const result = verifyTotp(secret, user.email, req.body?.code, now());
       const lastStep = lastTotpStep.get(user.id);
-      if (!result || result.step === lastStep) {
+      const totpOk = result && result.step !== lastStep;
+      const backupOk = !totpOk && consumeBackupCode(db, user.id, req.body?.code, now());
+      if (!totpOk && !backupOk) {
         writeAudit(db, {
           userId: user.id,
           event: "mfa_challenge_failed",
@@ -217,9 +222,18 @@ function createApp({ dbPath, security, encryptionKey, totp } = {}) {
         return res.status(401).json({ error: "Invalid code" });
       }
       pendingMfa.consume(req.body.mfa_token);
-      lastTotpStep.set(user.id, result.step);
+      if (totpOk) {
+        lastTotpStep.set(user.id, result.step);
+      }
       const meta = clientMeta(req);
       issueSession(res, db, user, meta);
+      if (backupOk) {
+        writeAudit(db, {
+          userId: user.id,
+          event: "backup_code_used",
+          ...meta,
+        });
+      }
       writeAudit(db, {
         userId: user.id,
         event: "login_success",

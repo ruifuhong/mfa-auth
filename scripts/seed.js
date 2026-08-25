@@ -1,10 +1,16 @@
 const { openDatabase } = require("../src/db");
 const { createUser } = require("../src/users");
 
+const DEMO_PASSWORD = "password12345";
+
 const DEMO_USERS = [
-  { email: "alice@example.com", password: "password12345" },
-  { email: "bob@example.com", password: "password12345" },
-  { email: "carol@example.com", password: "password12345" },
+  { email: "alice@example.com", password: DEMO_PASSWORD },
+  { email: "bob@example.com", password: DEMO_PASSWORD },
+  { email: "carol@example.com", password: DEMO_PASSWORD },
+  ...Array.from({ length: 20 }, (_, i) => {
+    const n = String(i + 1).padStart(2, "0");
+    return { email: `test${n}@example.com`, password: DEMO_PASSWORD };
+  }),
 ];
 
 async function seedDemoUsers(db) {
@@ -32,7 +38,7 @@ async function main() {
     }
   }
   db.close();
-  console.log("Done. Passwords are all: password12345");
+  console.log(`Done. ${DEMO_USERS.length} accounts. Passwords are all: ${DEMO_PASSWORD}`);
 }
 
 if (require.main === module) {
@@ -42,4 +48,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { DEMO_USERS, seedDemoUsers };
+module.exports = { DEMO_USERS, DEMO_PASSWORD, seedDemoUsers };

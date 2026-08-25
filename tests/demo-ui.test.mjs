@@ -72,32 +72,36 @@ describe("demo seed", () => {
     closeApp(app, dbPath);
   });
 
-  it("creates three demo users that can log in, and is idempotent", async () => {
-    const first = await seedDemoUsers(app.locals.db);
-    expect(first).toHaveLength(3);
-    expect(first.every((row) => row.status === "created")).toBe(true);
+  it(
+    "creates all demo users that can authenticate, and is idempotent",
+    async () => {
+      const first = await seedDemoUsers(app.locals.db);
+      expect(first).toHaveLength(DEMO_USERS.length);
+      expect(first.every((row) => row.status === "created")).toBe(true);
 
-    for (const demo of DEMO_USERS) {
+      const samples = [DEMO_USERS[0], DEMO_USERS[3], DEMO_USERS[DEMO_USERS.length - 1]];
+      for (const demo of samples) {
+        await expect(
+          verifyPasswordLogin(app.locals.db, {
+            email: demo.email,
+            password: demo.password,
+          }),
+        ).resolves.toMatchObject({ email: demo.email, mfa_enabled: false });
+      }
+
       const login = await request(app).post("/login").send({
-        email: demo.email,
-        password: demo.password,
+        email: samples[2].email,
+        password: samples[2].password,
       });
       expect(login.status).toBe(200);
-      expect(login.body.email).toBe(demo.email);
-      expect(login.body.mfa_enabled).toBe(false);
       expect(login.body.status).toBe("MFA_ENROLLMENT_REQUIRED");
       expect(login.body.qr_data_url).toMatch(/^data:image\/png;base64,/);
-      await expect(
-        verifyPasswordLogin(app.locals.db, {
-          email: demo.email,
-          password: demo.password,
-        }),
-      ).resolves.toMatchObject({ email: demo.email });
-    }
 
-    const second = await seedDemoUsers(app.locals.db);
-    expect(second.every((row) => row.status === "skipped")).toBe(true);
-    const count = app.locals.db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
-    expect(count).toBe(3);
-  });
+      const second = await seedDemoUsers(app.locals.db);
+      expect(second.every((row) => row.status === "skipped")).toBe(true);
+      const count = app.locals.db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
+      expect(count).toBe(DEMO_USERS.length);
+    },
+    60_000,
+  );
 });

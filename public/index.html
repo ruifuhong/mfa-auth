@@ -1,158 +1,192 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-Hant">
-<head>
-  <meta charset="utf-8" />
-  <title>mfa-auth demo</title>
-</head>
-<body>
-  <h1>mfa-auth（極簡試玩）</h1>
-  <p>
+  <head>
+    <meta charset="utf-8" />
+    <title>mfa-auth demo</title>
+  </head>
+  <body>
+    <!-- <h1>mfa-auth</h1> -->
+    <!-- <p>
     MFA 為強制：密碼登入成功後會<strong>自動產生 QR</strong>，Confirm 完成前 <code>/me</code> 會是 403。
     之後每次登入需再輸入 TOTP／備援碼。
-  </p>
+  </p> -->
 
-  <h2>註冊</h2>
-  <form id="signup">
-    <label>email <input name="email" type="email" required /></label>
-    <label>password <input name="password" type="password" required minlength="8" /></label>
-    <button type="submit">Signup</button>
-  </form>
+    <h2>註冊 Register</h2>
+    <form id="signup">
+      <label>email <input name="email" type="email" required /></label>
+      <label
+        >password <input name="password" type="password" required minlength="8"
+      /></label>
+      <button type="submit">Signup</button>
+    </form>
 
-  <h2>登入</h2>
-  <form id="login">
-    <label>email <input name="email" type="email" required value="alice@example.com" /></label>
-    <label>password <input name="password" type="password" required value="password12345" /></label>
-    <button type="submit">Login</button>
-  </form>
+    <h2>登入 Login</h2>
+    <form id="login">
+      <label>email <input name="email" type="email" required value="" /></label>
+      <label
+        >password <input name="password" type="password" required value=""
+      /></label>
+      <button type="submit">Login</button>
+    </form>
 
-  <h2>開啟 MFA（登入後自動出現 QR；也可按重新產生）</h2>
-  <p>
-    <button type="button" id="enroll">重新產生 QR（Enroll）</button>
-  </p>
-  <p id="qr-wrap" hidden>
-    <img id="qr" alt="TOTP QR" width="200" height="200" /><br />
-    <small>用 Google Authenticator / Authy 掃描，再填下方 6 碼 Confirm。</small>
-  </p>
-  <form id="confirm">
-    <label>App 上的 6 碼 <input name="code" pattern="[0-9]{6}" maxlength="6" required /></label>
-    <button type="submit">Confirm（真正開啟 MFA）</button>
-  </form>
-  <p><strong>備援碼只會在 Confirm 成功時顯示一次</strong>，請立刻複製存好。</p>
+    <section style="background-color: #abf7b1; display: inline-block">
+      <h2>首次登入：開啟 MFA | First Login: Enable MFA</h2>
+      <p>
+        <button type="button" id="enroll">
+          重新產生 QR 碼 Regenerate QR Code
+        </button>
+      </p>
+      <p id="qr-wrap" hidden>
+        <img id="qr" alt="TOTP QR" width="200" height="200" /><br />
+        <small
+          >用 Google Authenticator / Authy 掃描，再填下方 6 碼 Confirm。</small
+        >
+      </p>
+      <form id="confirm">
+        <label
+          >App 上的 6 碼 6-digit Code on App
+          <input name="code" pattern="[0-9]{6}" maxlength="6" required
+        /></label>
+        <button type="submit">Confirm（MFA On）</button>
+      </form>
+      <p>
+        <strong>備援碼只會在 Confirm 成功時顯示一次</strong>，請立刻複製存好。
+        <br />
+        <strong
+          >Backup codes are only shown once upon successful
+          confirmation.</strong
+        >
+        Please copy and save them immediately.
+      </p>
+    </section>
 
-  <h2>之後登入的 MFA 驗證（login 回傳 MFA_REQUIRED 時）</h2>
-  <form id="mfa">
-    <label>mfa_token <input name="mfa_token" id="mfa_token" /></label>
-    <label>code（TOTP 或備援碼） <input name="code" /></label>
-    <button type="submit">Verify MFA</button>
-  </form>
+    <h2>常態登入 General Login</h2>
+    <form id="mfa">
+      <input type="hidden" name="mfa_token" id="mfa_token" />
+      <label>code / totp backup code <input name="code" /></label>
+      <button type="submit">Verify MFA</button>
+    </form>
 
-  <h2>目前身分</h2>
-  <button type="button" id="me">GET /me</button>
-  <button type="button" id="logout">Logout</button>
+    <h2>目前身分 Current Identity</h2>
+    <button type="button" id="me">GET /me</button>
+    <button type="button" id="logout">Logout</button>
 
-  <h2>輸出</h2>
-  <pre id="out">(尚未操作)</pre>
+    <h2>輸出 Output</h2>
+    <pre id="out">(尚未操作 Not started)</pre>
 
-  <h2>試玩帳號（密碼皆為 password12345）</h2>
-  <ul>
-    <li>alice@example.com / bob@example.com / carol@example.com</li>
-    <li>test01@example.com … test20@example.com（共 20 組）</li>
-  </ul>
+    <!-- <h2>試玩帳號（密碼皆為 password12345）</h2>
+    <ul>
+      <li>alice@example.com / bob@example.com / carol@example.com</li>
+      <li>test01@example.com … test20@example.com（共 20 組）</li>
+    </ul> -->
 
-  <script>
-    const out = document.getElementById("out");
+    <script>
+      const out = document.getElementById("out");
 
-    function show(label, data) {
-      out.textContent = typeof data === "string"
-        ? label + "\n" + data
-        : label + "\n" + JSON.stringify(data, null, 2);
-    }
-
-    function showQr(dataUrl) {
-      const wrap = document.getElementById("qr-wrap");
-      const img = document.getElementById("qr");
-      if (dataUrl) {
-        img.src = dataUrl;
-        wrap.hidden = false;
-      } else {
-        wrap.hidden = true;
-        img.removeAttribute("src");
+      function show(label, data) {
+        out.textContent =
+          typeof data === "string"
+            ? label + "\n" + data
+            : label + "\n" + JSON.stringify(data, null, 2);
       }
-    }
 
-    async function api(method, path, body) {
-      const res = await fetch(path, {
-        method,
-        credentials: "include",
-        headers: body ? { "Content-Type": "application/json" } : undefined,
-        body: body ? JSON.stringify(body) : undefined,
+      function showQr(dataUrl) {
+        const wrap = document.getElementById("qr-wrap");
+        const img = document.getElementById("qr");
+        if (dataUrl) {
+          img.src = dataUrl;
+          wrap.hidden = false;
+        } else {
+          wrap.hidden = true;
+          img.removeAttribute("src");
+        }
+      }
+
+      async function api(method, path, body) {
+        const res = await fetch(path, {
+          method,
+          credentials: "include",
+          headers: body ? { "Content-Type": "application/json" } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const text = await res.text();
+        let json = null;
+        try {
+          json = text ? JSON.parse(text) : null;
+        } catch {
+          json = text;
+        }
+        return { status: res.status, body: json };
+      }
+
+      document
+        .getElementById("signup")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const fd = new FormData(e.target);
+          show(
+            "POST /signup",
+            await api("POST", "/signup", {
+              email: fd.get("email"),
+              password: fd.get("password"),
+            }),
+          );
+        });
+
+      document.getElementById("login").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const result = await api("POST", "/login", {
+          email: fd.get("email"),
+          password: fd.get("password"),
+        });
+        if (result.body && result.body.mfa_token) {
+          document.getElementById("mfa_token").value = result.body.mfa_token;
+        }
+        if (result.body && result.body.status === "MFA_ENROLLMENT_REQUIRED") {
+          showQr(result.body.qr_data_url);
+        }
+        show("POST /login", result);
       });
-      const text = await res.text();
-      let json = null;
-      try {
-        json = text ? JSON.parse(text) : null;
-      } catch {
-        json = text;
-      }
-      return { status: res.status, body: json };
-    }
 
-    document.getElementById("signup").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      show("POST /signup", await api("POST", "/signup", {
-        email: fd.get("email"),
-        password: fd.get("password"),
-      }));
-    });
-
-    document.getElementById("login").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const result = await api("POST", "/login", {
-        email: fd.get("email"),
-        password: fd.get("password"),
+      document.getElementById("enroll").addEventListener("click", async () => {
+        const result = await api("POST", "/mfa/enroll");
+        show("POST /mfa/enroll", result);
+        if (result.status === 200 && result.body) {
+          showQr(result.body.qr_data_url);
+        }
       });
-      if (result.body && result.body.mfa_token) {
-        document.getElementById("mfa_token").value = result.body.mfa_token;
-      }
-      if (result.body && result.body.status === "MFA_ENROLLMENT_REQUIRED") {
-        showQr(result.body.qr_data_url);
-      }
-      show("POST /login", result);
-    });
 
-    document.getElementById("enroll").addEventListener("click", async () => {
-      const result = await api("POST", "/mfa/enroll");
-      show("POST /mfa/enroll", result);
-      if (result.status === 200 && result.body) {
-        showQr(result.body.qr_data_url);
-      }
-    });
+      document
+        .getElementById("confirm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const fd = new FormData(e.target);
+          const result = await api("POST", "/mfa/confirm", {
+            code: fd.get("code"),
+          });
+          show("POST /mfa/confirm（請立刻複製 backup_codes）", result);
+        });
 
-    document.getElementById("confirm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const result = await api("POST", "/mfa/confirm", { code: fd.get("code") });
-      show("POST /mfa/confirm（請立刻複製 backup_codes）", result);
-    });
+      document.getElementById("mfa").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        show(
+          "POST /mfa/verify",
+          await api("POST", "/mfa/verify", {
+            mfa_token: fd.get("mfa_token"),
+            code: fd.get("code"),
+          }),
+        );
+      });
 
-    document.getElementById("mfa").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      show("POST /mfa/verify", await api("POST", "/mfa/verify", {
-        mfa_token: fd.get("mfa_token"),
-        code: fd.get("code"),
-      }));
-    });
+      document.getElementById("me").addEventListener("click", async () => {
+        show("GET /me", await api("GET", "/me"));
+      });
 
-    document.getElementById("me").addEventListener("click", async () => {
-      show("GET /me", await api("GET", "/me"));
-    });
-
-    document.getElementById("logout").addEventListener("click", async () => {
-      show("POST /logout", await api("POST", "/logout"));
-    });
-  </script>
-</body>
+      document.getElementById("logout").addEventListener("click", async () => {
+        show("POST /logout", await api("POST", "/logout"));
+      });
+    </script>
+  </body>
 </html>

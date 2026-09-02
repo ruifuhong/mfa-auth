@@ -165,7 +165,11 @@
           const result = await api("POST", "/mfa/confirm", {
             code: fd.get("code"),
           });
-          show("POST /mfa/confirm（請立刻複製 backup_codes）", result);
+          const label =
+            result.status === 200
+              ? "POST /mfa/confirm（請立刻複製 backup_codes）"
+              : "POST /mfa/confirm";
+          show(label, result);
         });
 
       document.getElementById("mfa").addEventListener("submit", async (e) => {

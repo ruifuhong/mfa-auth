@@ -1,14 +1,20 @@
 # mfa-auth
 
 Localhost MVP for custom auth with:
-- email/password
-- mandatory TOTP MFA
-- single-use backup codes
-- server-side sessions
+- Email / password
+- Mandatory TOTP MFA
+- Single-use backup codes
+- Server-side sessions
 
-Stack: Express, SQLite (`better-sqlite3`), Vitest/Supertest.
+Stack: Express, SQLite (`better-sqlite3`), Vitest/Supertest
 
 ---
+
+## Medium Articles
+
+1. [大哉問：「幫我做一個登入登出功能」第一篇－超基礎功能 The Great Challenge: “Build a Login and Logout Feature for Me” — Part 1: The Absolute Basics](https://medium.com/@ralph-tech/%E4%B8%AD%E8%8B%B1%E9%9B%99%E8%AA%9E-zh-en-bilingual-%E5%A4%A7%E5%93%89%E5%95%8F-%E5%B9%AB%E6%88%91%E5%81%9A%E4%B8%80%E5%80%8B%E7%99%BB%E5%85%A5%E7%99%BB%E5%87%BA%E5%8A%9F%E8%83%BD-%E7%AC%AC%E4%B8%80%E7%AF%87-%E8%B6%85%E5%9F%BA%E7%A4%8E%E5%8A%9F%E8%83%BD-the-great-question-build-a-login-and-logout-1372dc69f27b)
+1. [大哉問：「幫我做一個登入登出功能」第二篇－多重要素驗證 The Great Challenge: “Build a Login and Logout Feature for Me” — Part 2: Multi-Factor Authentication (MFA)](https://medium.com/@ralph-tech/%E4%B8%AD%E8%8B%B1%E9%9B%99%E8%AA%9E-zh-en-bilingual-%E5%A4%A7%E5%93%89%E5%95%8F-%E5%B9%AB%E6%88%91%E5%81%9A%E4%B8%80%E5%80%8B%E7%99%BB%E5%85%A5%E7%99%BB%E5%87%BA%E5%8A%9F%E8%83%BD-%E7%AC%AC%E4%BA%8C%E7%AF%87-%E5%A4%9A%E9%87%8D%E8%A6%81%E7%B4%A0%E9%A9%97%E8%AD%89-the-great-question-build-a-login-and-logout-630f091a9d96)
+1. [大哉問：「幫我做一個登入登出功能」第三篇－使用者體驗流程說明 The Great Challenge: “Build a Login and Logout Feature for Me” — Part 3: User Experience Flow Description](https://medium.com/@ralph-tech/%E4%B8%AD%E8%8B%B1%E9%9B%99%E8%AA%9E-zh-en-bilingual-%E5%A4%A7%E5%93%89%E5%95%8F-%E5%B9%AB%E6%88%91%E5%81%9A%E4%B8%80%E5%80%8B%E7%99%BB%E5%85%A5%E7%99%BB%E5%87%BA%E5%8A%9F%E8%83%BD-%E7%AC%AC%E4%B8%89%E7%AF%87-%E4%BD%BF%E7%94%A8%E8%80%85%E9%AB%94%E9%A9%97%E6%B5%81%E7%A8%8B%E8%AA%AA%E6%98%8E-the-great-challenge-build-a-login-and-55504dc18496)
 
 ## Quick Start
 
@@ -36,7 +42,6 @@ Demo accounts (password for all: `password12345`):
 
 - `alice@example.com`, `bob@example.com`, `carol@example.com`
 - `test01@example.com` … `test20@example.com`
----
 
 ## User Flow
 
@@ -46,99 +51,51 @@ Demo accounts (password for all: `password12345`):
 4. **Later logins** → correct password returns `MFA_REQUIRED` + `mfa_token` (**no** full session). `POST /mfa/verify` with TOTP or a backup code issues a new `sid`.
 5. **Logout** → server sets `revoked_at`; cookie no longer works.
 
----
+## Security Features
 
-## 1. Filling gaps the prompt did not specify
+This project contains the following features:
 
-The PRD only proposed desired features (signup, login, MFA, logout) without specifying details. Here are additional implementations that I consider necessary for a login/logout project:
+- Signup
+- Login
+- MFA
+- Logout
 
-### Added — And Why
+with the following security design:
 
-| Addition | Why |
+### Already Applied
+
+| Designs | Description |
 | --- | --- |
 | **Pending MFA token** (no full `sid` on `MFA_REQUIRED`) | Password OK ≠ login complete; still need to finish MFA settings. |
 | **Session tokens stored as SHA-256 only** | A DB leak should not yield usable cookies. |
 | **TOTP seeds encrypted with AES-256-GCM** | Seeds are as sensitive as passwords; no plaintext in SQLite. |
 | **Generic `Invalid credentials` on login failure** | Reduces account enumeration. |
 | **Argon2 verify even when the user is missing** | Reduces obvious timing differences. |
-| **Audit log** (success/fail/MFA/backup) | Forensics and future alerting. |
+| **Audit log** | Forensics and future alerting. |
 
-### Considered But Not Built — And Why
+### Not Applied Yet
 
-| Not built | Reason |
+| Designs | Description |
 | --- | --- |
 | Passkeys / WebAuthn | Better phishing resistance, but implementation exceed MVP time.|
-| SMS / email OTP as primary MFA | SIM swap, inbox = reset channel, cost/deliverability. |
+| SMS / email OTP as primary MFA | SIM swap, inbox = reset channel, cost / deliverability. |
 | Forgot-password / email verification | Easy to implement as an MFA bypass; better omit than ship a half-safe path. |
-| Logout-all, device list, trusted devices | PRD asked for single-session revoke; multi-device needs more complex session settings. |
-| Redis / KMS / multi-instance | Local single-process MVP; in-memory rate limit / pending tokens are acceptable here for MVP. |
+| Logout-all, device list, trusted devices | Multi-device needs more complex session settings. |
+| Redis / KMS / multi-instance | In-memory limits / tokens acceptable on one process for MVP, but will need Redis / DB for shared state and KMS for key rotation for production. |
 
----
-
-## 2. Risk Assessment: What to Prioritize
-
-Identity systems are attack targets. Limited time cannot cover everything; this is the priority order and rationale.
-
-### Prioritized (Done)
-
-| Risk | Why prioritize | How this project addresses it |
-| --- | --- | --- |
-| **Password dump / offline cracking** | Highest blast radius if DB leaks | Argon2id hasing so that passwords cannot be restored|
-| **Stolen session that cannot be revoked** | Long-lived JWTs survive “logout” | Opaque cookie + `revoked_at`; token hashed at db |
-| **Skipping the second factor** | MFA in name only | Forced enroll; no full session before `MFA_REQUIRED` verify; `/me` 403 until confirm |
-| **Credential stuffing / brute force** | Most common remote abuse | Per-email and per-IP fail counts + temporary lock; skip Argon2 while locked |
-| **TOTP seed leak** | Permanent second-factor compromise | AES-256-GCM at rest |
-| **Backup codes as a second password file** | Plaintext codes are a backdoor | Shown once; SHA-256; single-use + audit |
-| **Account enumeration** | Helps attackers build target lists | Generic error messages |
-
-### Consciously Deferred (Or Only Partly Handled)
-
-| Risk | Why not (fully) this round |
-| --- | --- |
-| **Phishing against TOTP** | Right fix is WebAuthn; traded for a finishable MFA story |
-| **XSS stealing cookies** | HttpOnly blocks JS reads; full answer needs content security policy (CSP) |
-| **Rate limit / pending MFA lost on process restart** | Single-node demo; production should use Redis (or similar) |
-| **Key management / rotation** | Currently fixed in env key; production needs KMS for key rotation |
-| **Account-recovery social engineering** (support MFA reset) | A naive “email reset” without process is more dangerous than omitting it |
-| **Wipe all devices after theft** | No logout-all |
-| **Advanced abuse** (OTP spam, residential proxies, slow spray) | Basic limiting only |
-
-### Libraries vs What I Still Own
+## Libraries
 
 **No** full auth SaaS (Auth0, Firebase Auth, Cognito, Clerk, etc.).
 
-| Dependency | What it covers | What I still own |
+| Dependency | Description | Local Settings |
 | --- | --- | --- |
-| `argon2` | Memory-hard hashing algorithm | When to hash/verify, dummy hash, policy |
-| `otpauth` | TOTP math and otpauth URI | Enrollment state machine, encrypted storage, replay, login wiring |
-| `qrcode` | QR encoding | When to expose it; never return plaintext secret |
-| `better-sqlite3` | Local persistence | Schema, semantics, backups, migrations |
-| `express` + `cookie-parser` | HTTP / cookie parsing | Cookie flags, CSRF stance, auth middleware |
+| `argon2` | Memory-hard hashing algorithm | When to hash / verify, dummy hash, policy |
+| `otpauth` | TOTP math and otpauth URI | Enrollment flow, encrypted TOTP seed storage, allowed window and code reuse prevention, login logic design |
+| `qrcode` | QR encoding | Expose timing; never return plaintext secret |
+| `better-sqlite3` | Local persistence | Schema, semantics, migrations |
+| `express` + `cookie-parser` | HTTP / cookie parsing | Cookie flags (`HttpOnly: true`, `SameSite: lax`), auth middleware |
 
-**Bottom line:** use libraries for crypto primitives; identity lifecycle, threat boundaries, and “can MFA be bypassed?” stay application responsibilities.
-
----
-
-## 3. Trade-offs: Known Gaps And “Two More Days”
-
-### Known Gaps / Unfinished
-
-- Pending MFA and rate limits live **in memory** (lost on restart; not shared across instances)
-- No **logout-all**, no session/device list
-- No safe **forgot-password / lost-MFA** product flow (after backup codes are gone: recreate account or edit DB)
-- Minimal UI is for demo only, not product UX
-
-### If Given Two More Days
-
-1. **Logout-all + list/revoke sessions** (actually recoverable after cookie theft)
-2. **Move rate limit / pending MFA to SQLite or Redis** with tests (restart behavior becomes predictable)
-3. **High-friction recovery sketch when backup codes are exhausted** (cooldown + audit + revoke all sessions; not “one email skips MFA”)
-
-Not first: fancy UI or SMS — weak marginal return for risk and maintainability.
-
----
-
-## Controls
+## Safety Controls
 
 | Control | Approach |
 | --- | --- |
@@ -147,25 +104,5 @@ Not first: fancy UI or SMS — weak marginal return for risk and maintainability
 | Backup codes | SHA-256, single-use, `used_at` |
 | Session | Opaque `sid`, hashed in DB, revocable |
 | Mandatory MFA | Auto-enroll; block `/me` until confirm |
-| Rate limit | Per email/IP; skip Argon2 while locked |
-| Audit | login / logout / MFA / backup events |
-
----
-
-## Project Layout
-
-```
-src/app.js           routes + mandatory MFA state machine
-src/users.js         signup / Argon2id
-src/session.js       opaque sid
-src/rate-limit.js    limiter (injectable clock)
-src/audit.js         audit_logs
-src/totp.js          otpauth / verify
-src/crypto-secret.js AES-256-GCM
-src/pending-mfa.js   MFA_REQUIRED tokens
-src/backup-codes.js  backup codes
-src/schema.sql       schema
-public/index.html    minimal demo UI
-scripts/migrate.js   apply schema
-scripts/seed.js      demo accounts
-tests/*.test.mjs     Vitest + Supertest
+| Rate limit | Per email / IP; skip Argon2 while locked |
+| Audit | Login / logout / MFA / backup events |
